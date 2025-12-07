@@ -261,13 +261,35 @@ begin
 
          end; -- end of embedded block
 
-      -- Exception Handling
+      -- Exception Handling, unanticipated errors
       -- ===============================
       exception
          when others then
-            dbms_output.put_line('Error: ' || sqlerrm);
-            -- Insert error message into error log table
-            insert into wkis_error_log ( error_msg ) values ( sqlerrm );
+            dbms_output.put_line('Error while processing transaction no '
+                                 || v_txn_no
+                                 || ': ' || v_err_msg);
+            -- Insert error message into error log table, avoid duplicates
+            select count(*)
+              into v_exists
+              from wkis_error_log
+             where transaction_no = v_txn_no;
+
+            -- If there are no duplicate entries in log, log the error
+            if v_exists = 0 then
+               insert into wkis_error_log (
+                  transaction_no,
+                  transaction_date,
+                  description,
+                  error_msg
+               ) values ( v_txn_no,
+                          v_first_date,
+                          v_first_desc,
+                          v_err_msg );
+            end if;
+
+            dbms_output.put_line(v_err_msg);
+            -- ensure not to delete or commit partial changes for this transaction
+            rollback;
       end;
       -- ===============================
 
