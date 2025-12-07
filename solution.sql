@@ -164,7 +164,17 @@ begin
 
          -- Check for errors in this section
          -- ===============================
-         -- IF NOT v_err_found then
+         -- Transaction Type error (transaction type is not D or C)
+            if not v_err_found then
+               if r_row.transaction_type not in ( g_debit,
+                                                  g_credit ) then
+                  v_err_found := true;
+                  v_err_msg := 'Invalid Transaction Type '
+                               || r_row.transaction_type
+                               || ' at Transaction No. '
+                               || v_txn_no;
+               end if;
+            end if;
 
          end if;
          -- ===============================
@@ -203,6 +213,48 @@ begin
                                  || ' amount: '
                                  || r_row.transaction_amount
                                  || ' type: ' || r_row.transaction_type);
+            insert into transaction_history (
+               transaction_no,
+               transaction_date,
+               description
+            ) values ( v_txn_no,
+                       v_first_date,
+                       v_first_desc );
+            -- Re-open row cursor to insert details + update accounts
+            open c_txn_rows(v_txn_no);
+            loop
+               fetch c_txn_rows into r_row;
+               exit when c_txn_rows%notfound;
+
+               -- Insert into table
+               insert into transaction_detail (
+                  transaction_no,
+                  account_no,
+                  transaction_type,
+                  transaction_amount
+               ) values ( r_row.transaction_no,
+                          r_row.account_no,
+                          r_row.transaction_type,
+                          r_row.transaction_amount );
+               
+               -- Get account default + balance
+               select default_type,
+                      account_balance
+                 into
+                  v_balance_type,
+                  v_balance
+                 from account
+                where account_no = r_row.account_no;
+
+                -- Apply balance rule: add when transaction type matches default otherwise subtract
+               if v_default_type = r_row.transaction_type then
+                  v_balance := v_balance + r_row.transaction_amount;
+               else
+                  v_balance := v_balance - r_row.transaction_amount;
+               end if;
+            end loop; -- end of insertion/update loop
+            -- ===============================
+
          end if;
          
          -- ===============================
