@@ -64,7 +64,8 @@ declare
    -- Explicit Cursor for transaction id's
    cursor c_txn_ids is
    select distinct transaction_no
-     from new_transactions;
+     from new_transactions
+     where transaction_no is not null;
 
    -- Explicit cursor for getting rows
    cursor c_txn_rows (
@@ -77,7 +78,7 @@ declare
           transaction_type,
           transaction_amount
      from new_transactions
-    where transaction_no = p_txn_no
+    where transaction_no = p_txn_no 
     order by account_no;
 
     -- Explicit cursor for getting null records
