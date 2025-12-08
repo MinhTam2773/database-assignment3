@@ -65,7 +65,7 @@ declare
    cursor c_txn_ids is
    select distinct transaction_no
      from new_transactions
-     where transaction_no is not null;
+    where transaction_no is not null;
 
    -- Explicit cursor for getting rows
    cursor c_txn_rows (
@@ -78,7 +78,7 @@ declare
           transaction_type,
           transaction_amount
      from new_transactions
-    where transaction_no = p_txn_no 
+    where transaction_no = p_txn_no
     order by account_no;
 
     -- Explicit cursor for getting null records
@@ -285,6 +285,19 @@ begin
 
          close c_txn_rows;
 
+         -- Catch debits vs credits equality check 
+         if not v_err_found then
+            if v_total_debits <> v_total_credits then
+               v_err_found := true;
+               v_err_msg := 'Debits ('
+                            || v_total_debits
+                            || ') not equal to Credits ('
+                            || v_total_credits
+                            || ') for transaction no. '
+                            || v_txn_no;
+            end if;
+         end if;
+
          -- ===============================
          -- Begin processing in this section, or log error
          -- ===============================
@@ -413,6 +426,6 @@ begin
    end loop; -- end of outer loop
    close c_txn_ids;
    -- commit to save changes
-   -- COMMIT;
+   commit;
 end;
 /
