@@ -14,10 +14,10 @@ Part 1 Requirements
 =========================================
 - Use explicit cursors to read from NEW_TRANSACTIONS [Implemented]
 
-- Insert the read tables into TRANSACTION_DETAIL and TRANSACTION_HISTORY
+- Insert the read tables into TRANSACTION_DETAIL and TRANSACTION_HISTORY [Complete]
 
-- Update the appropriate account balance in ACCOUNT
-   - Determine Debit(D) or Credit(C) to decide whether to add or subtract.
+- Update the appropriate account balance in ACCOUNT [Implemented]
+   - Determine Debit(D) or Credit(C) to decide whether to add or subtract. [Implemented]
    
 - Removed processed transactions from NEW_TRANSACTIONS
 
@@ -53,7 +53,7 @@ Part 2 Errors to handle
 - Invalid Account Number (account not found)
 - Negative Transaction Amount
 - Invalid Transaction Type (anything other than C or D)
-- Unanticipated Errors
+- Unanticipated Errors [Complete(?)]
 
 
 *******************/
@@ -121,7 +121,7 @@ begin
          and error_msg like 'Missing transaction number';
 
    -- insert error into log
-      if v.exists = 0 then
+      if v_exists = 0 then
          insert into wkis_error_log (
             transaction_no,
             transaction_date,
@@ -145,11 +145,18 @@ begin
       exit when c_txn_ids%notfound;
 
       -- open up embedded block to read in all rows and detect first error
+      declare
+         v_err_found     boolean;
+         v_err_msg       varchar2(200);
+         v_total_debits  number;
+         v_total_credits number;
+         v_first_date    date;
+         v_first_desc    varchar2(200);
       begin
          v_err_found := false; -- whether an error has been found
-         v_er_msg := null; -- error message
+         v_err_msg := null; -- error message
          v_total_debits := 0; -- total transaction in debits
-         v_total_credit := 0; -- total transaction in credits
+         v_total_credits := 0; -- total transaction in credits
          v_first_date := null; -- current row's transaction date
          v_first_desc := null; -- current row's description
 
@@ -164,8 +171,9 @@ begin
 
          -- Check for errors in this section
          -- ===============================
-         -- Transaction Type error (transaction type is not D or C)
+            -- If there hasn't been an error found, then check through for next error:
             if not v_err_found then
+               -- Transaction Type error (transaction type is not D or C):
                if r_row.transaction_type not in ( g_debit,
                                                   g_credit ) then
                   v_err_found := true;
@@ -174,9 +182,64 @@ begin
                                || ' at Transaction No. '
                                || v_txn_no;
                end if;
-            end if;
 
+               -- If negative transaction amount:
+               if
+                  not v_err_found
+                  and r_row.transaction_amount < 0
+               then
+                  v_err_found := true;
+                  v_err_msg := 'Negative Transaction Amount '
+                               || r_row.transaction_amount
+                               || ' at Transaction No. '
+                               || v_txn_no;
+               end if;
+               -- If invalid account number:
+               if not v_err_found then
+                  begin
+                     select default_type,
+                            account_balance
+                       into
+                        v_default_type,
+                        v_balance
+                       from account
+                      where account_no = r_row.account_no;
+                  exception
+                     when no_data_found then
+                        v_err_found := true;
+                        v_err_msg := 'Invalid account number: '
+                                     || r_row.account_no
+                                     || ' for transaction '
+                                     || v_txn_no;
+                  end;
+               end if;
+               -- Accumulate totals (only for valid transaction types):
+               if not v_err_found then
+                  if r_row.transaction_type = g_debit then
+                     v_total_debits := v_total_debits + r_row.transaction_amount;
+                  else
+                     v_total_credits := v_total_credits + r_row.transaction_amount;
+                  end if;
+               end if;
+            end if;
          end if;
+         -- Continue reading remaining rows and accumulate totals
+         loop
+            fetch c_txn_rows into r_row;
+            exit when c_txn_rows%notfound;
+            if not v_err_found then
+            -- if invalid type
+               if r_row.transaction_type not in ( g_debit,
+                                                  g_credit ) then
+                  v_err_found := true;
+                  v_err_msg := 'Invalid transaction type: '
+                               || r_row.transaction_type
+                               || ' for transaction '
+                               || v_txn_no;
+               end if;
+            end if;
+         end loop;
+         close c_txn_rows;
          -- ===============================
          -- Begin processing in this section, or log error
          -- ===============================
@@ -202,17 +265,18 @@ begin
 
             dbms_output.put_line('Error with Transaction No. '
                                  || v_txn_no
-                                 || ':' || v_err_msg);
+                                 || ': ' || v_err_msg);
          -- ===============================      
          -- If transaction is clean (no errors found), begin processing
          -- ===============================
          -- print processing info
          else
             dbms_output.put_line('Processing: transaction id: '
-                                 || r_row.transaction_no
+                                 || v_txn_no
                                  || ' amount: '
                                  || r_row.transaction_amount
                                  || ' type: ' || r_row.transaction_type);
+            -- insert into transaction history
             insert into transaction_history (
                transaction_no,
                transaction_date,
@@ -241,7 +305,7 @@ begin
                select default_type,
                       account_balance
                  into
-                  v_balance_type,
+                  v_default_type,
                   v_balance
                  from account
                 where account_no = r_row.account_no;
@@ -252,8 +316,17 @@ begin
                else
                   v_balance := v_balance - r_row.transaction_amount;
                end if;
+               -- update account balance
+               update account
+                  set
+                  account_balance = v_balance
+                where account_no = r_row.account_no;
             end loop; -- end of insertion/update loop
+            close c_txn_rows;
             -- ===============================
+            -- Remove from NEW_TRANSACTIONS 
+            delete from new_transactions
+             where transaction_no = v_txn_no;
 
          end if;
          
@@ -295,5 +368,7 @@ begin
 
    end loop; -- end of outer loop
    close c_txn_ids;
+   -- commit to save changes
+   -- COMMIT;
 end;
 /
