@@ -19,7 +19,7 @@ Part 1 Requirements
 - Update the appropriate account balance in ACCOUNT [Implemented]
    - Determine Debit(D) or Credit(C) to decide whether to add or subtract. [Implemented]
    
-- Removed processed transactions from NEW_TRANSACTIONS
+- Removed processed transactions from NEW_TRANSACTIONS [Implemented]
 
 - Include COMMIT to save changes
 =========================================
@@ -49,10 +49,10 @@ Part 2 Requirements
 Part 2 Errors to handle
 =========================================
 - Missing Transaction Number (NULL transaction number) [Complete]
-- Debits and Credits Not Equal (transaction imbalance)
-- Invalid Account Number (account not found)
-- Negative Transaction Amount
-- Invalid Transaction Type (anything other than C or D)
+- Debits and Credits Not Equal (transaction imbalance) [Implemented]
+- Invalid Account Number (account not found) [Implemented]
+- Negative Transaction Amount [Implemented]
+- Invalid Transaction Type (anything other than C or D) [Implemented]
 - Unanticipated Errors [Complete(?)]
 
 
