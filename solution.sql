@@ -93,17 +93,21 @@ declare
 
     -- Constants
 
-   g_credit       constant varchar2(1) := 'C'; -- constant for account type, represents Credit
-   g_debit        constant varchar2(1) := 'D'; -- constant for account type, represents Debit
+   g_credit        constant varchar2(1) := 'C'; -- constant for account type, represents Credit
+   g_debit         constant varchar2(1) := 'D'; -- constant for account type, represents Debit
 
     -- Work Variables
-   v_txn_no       new_transactions.transaction_no%type; -- the current transaction number being processed
-   r_row          c_txn_rows%rowtype; -- a transaction row
-   v_default_type account.default_type%type; -- the account's normal balance side, C or D
-   v_balance      account.account_balance%type; -- the account's current balance
-   v_first_date   new_transactions.transaction_date%type; -- holding var for the transaction_date of the current transaction
-   v_first_desc   new_transactions.description%type; -- holding var for the description of the current transaction
-   v_exists       number; -- the number of duplicates of a row in wkis_error_log
+   v_txn_no        new_transactions.transaction_no%type; -- the current transaction number being processed
+   r_row           c_txn_rows%rowtype; -- a transaction row
+   v_default_type  account_type.default_trans_type%type; -- the account's normal balance side, C or D
+   v_balance       account.account_balance%type; -- the account's current balance
+   v_first_date    new_transactions.transaction_date%type; -- holding var for the transaction_date of the current transaction
+   v_first_desc    new_transactions.description%type; -- holding var for the description of the current transaction
+   v_exists        number; -- the number of duplicates of a row in wkis_error_log
+   v_total_credits number;
+   v_total_debits  number;
+   v_err_found     boolean;
+   v_err_msg       varchar2(100);
 begin
    -- handle null transaction numbers
    -- ===============================
@@ -132,7 +136,7 @@ begin
                     v_first_desc,
                     'Missing transaction number' );
       end if;
-      dbms_output.put_line("Logged missing Transaction Number");
+      dbms_output.put_line('Logged missing Transaction Number');
    end if;
    close c_null_txn_rows;
    -- ===============================
@@ -145,13 +149,6 @@ begin
       exit when c_txn_ids%notfound;
 
       -- open up embedded block to read in all rows and detect first error
-      declare
-         v_err_found     boolean;
-         v_err_msg       varchar2(200);
-         v_total_debits  number;
-         v_total_credits number;
-         v_first_date    date;
-         v_first_desc    varchar2(200);
       begin
          v_err_found := false; -- whether an error has been found
          v_err_msg := null; -- error message
@@ -197,12 +194,14 @@ begin
                -- If invalid account number:
                if not v_err_found then
                   begin
-                     select default_type,
-                            account_balance
+                     select at.default_trans_type,
+                            a.account_balance
                        into
                         v_default_type,
                         v_balance
-                       from account
+                       from account a
+                       join account_type at
+                     on a.account_type_code = at.account_type_code
                       where account_no = r_row.account_no;
                   exception
                      when no_data_found then
@@ -223,23 +222,68 @@ begin
                end if;
             end if;
          end if;
-         -- Continue reading remaining rows and accumulate totals
+         -- ===============================
+         -- Continue reading remaining rows after first row and accumulate totals
+         -- ===============================
          loop
             fetch c_txn_rows into r_row;
             exit when c_txn_rows%notfound;
             if not v_err_found then
-            -- if invalid type
+            -- Transaction Type error (transaction type is not D or C):
                if r_row.transaction_type not in ( g_debit,
                                                   g_credit ) then
                   v_err_found := true;
-                  v_err_msg := 'Invalid transaction type: '
+                  v_err_msg := 'Invalid Transaction Type '
                                || r_row.transaction_type
-                               || ' for transaction '
+                               || ' at Transaction No. '
                                || v_txn_no;
+               end if;
+
+               -- If negative transaction amount:
+               if
+                  not v_err_found
+                  and r_row.transaction_amount < 0
+               then
+                  v_err_found := true;
+                  v_err_msg := 'Negative Transaction Amount '
+                               || r_row.transaction_amount
+                               || ' at Transaction No. '
+                               || v_txn_no;
+               end if;
+               -- If invalid account number:
+               if not v_err_found then
+                  begin
+                     select at.default_trans_type,
+                            a.account_balance
+                       into
+                        v_default_type,
+                        v_balance
+                       from account a
+                       join account_type at
+                     on a.account_type_code = at.account_type_code
+                      where account_no = r_row.account_no;
+                  exception
+                     when no_data_found then
+                        v_err_found := true;
+                        v_err_msg := 'Invalid account number: '
+                                     || r_row.account_no
+                                     || ' for transaction '
+                                     || v_txn_no;
+                  end;
+               end if;
+               -- Accumulate totals (only for valid transaction types):
+               if not v_err_found then
+                  if r_row.transaction_type = g_debit then
+                     v_total_debits := v_total_debits + r_row.transaction_amount;
+                  else
+                     v_total_credits := v_total_credits + r_row.transaction_amount;
+                  end if;
                end if;
             end if;
          end loop;
+
          close c_txn_rows;
+
          -- ===============================
          -- Begin processing in this section, or log error
          -- ===============================
@@ -302,12 +346,14 @@ begin
                           r_row.transaction_amount );
                
                -- Get account default + balance
-               select default_type,
-                      account_balance
+               select at.default_trans_type,
+                      a.account_balance
                  into
                   v_default_type,
                   v_balance
-                 from account
+                 from account a
+                 join account_type at
+               on a.account_type_code = at.account_type_code
                 where account_no = r_row.account_no;
 
                 -- Apply balance rule: add when transaction type matches default otherwise subtract
@@ -331,16 +377,13 @@ begin
          end if;
          
          -- ===============================
-
-         end; -- end of embedded block
-
-      -- Exception Handling, unanticipated errors
+         -- Exception Handling, unanticipated errors
       -- ===============================
       exception
          when others then
             dbms_output.put_line('Error while processing transaction no '
                                  || v_txn_no
-                                 || ': ' || v_err_msg);
+                                 || ': ' || sqlerrm);
             -- Insert error message into error log table, avoid duplicates
             select count(*)
               into v_exists
@@ -363,7 +406,7 @@ begin
             dbms_output.put_line(v_err_msg);
             -- ensure not to delete or commit partial changes for this transaction
             rollback;
-      end;
+      end; -- end of embedded block
       -- ===============================
 
    end loop; -- end of outer loop
