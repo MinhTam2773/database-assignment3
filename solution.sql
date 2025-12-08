@@ -137,7 +137,7 @@ begin
                     v_first_desc,
                     'Missing transaction number' );
       end if;
-      dbms_output.put_line('Logged missing Transaction Number');
+      dbms_output.put_line('Logged all missing Transaction Numbers');
    end if;
    close c_null_txn_rows;
    -- ===============================
