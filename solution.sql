@@ -36,185 +36,271 @@ Ensures no partial updates occur for invalid transactions.
 
 *************************************************************/
 
-SET SERVEROUTPUT ON;
+   SET SERVEROUTPUT ON;
 
-DECLARE
-  g_credit CONSTANT VARCHAR2(1) := 'C';
-  g_debit  CONSTANT VARCHAR2(1) := 'D';
-
-  v_first_date  NEW_TRANSACTIONS.transaction_date%TYPE;
-  v_first_desc  NEW_TRANSACTIONS.description%TYPE;
-  v_total_debits  NUMBER;
-  v_total_credits NUMBER;
-  v_err_found     BOOLEAN;
-  v_err_msg       VARCHAR2(200);
-  v_exists        NUMBER;
-BEGIN
+declare
+   g_credit        constant varchar2(1) := 'C';
+   g_debit         constant varchar2(1) := 'D';
+   v_first_date    new_transactions.transaction_date%type;
+   v_first_desc    new_transactions.description%type;
+   v_total_debits  number;
+   v_total_credits number;
+   v_err_found     boolean;
+   v_err_msg       varchar2(200);
+   v_exists        number;
+begin
   -- Outer: iterate distinct transaction numbers (will include NULL once if present)
-  FOR txn_rec IN (
-    SELECT DISTINCT transaction_no
-      FROM new_transactions
-  ) LOOP
-
+   for txn_rec in (
+      select distinct transaction_no
+        from new_transactions
+   ) loop
+      begin
     -- initialize per-transaction vars
-    v_err_found := FALSE;
-    v_err_msg := NULL;
-    v_total_debits := 0;
-    v_total_credits := 0;
-    v_first_date := NULL;
-    v_first_desc := NULL;
+         v_err_found := false;
+         v_err_msg := null;
+         v_total_debits := 0;
+         v_total_credits := 0;
+         v_first_date := null;
+         v_first_desc := null;
 
     -- Handle NULL transaction number explicitly: log once and skip processing rows
-    IF txn_rec.transaction_no IS NULL THEN
-      -- fetch one row to get date/desc for error message (optional)
-      SELECT transaction_date, description
-        INTO v_first_date, v_first_desc
-        FROM new_transactions
-       WHERE transaction_no IS NULL
-         AND ROWNUM = 1;
+         if txn_rec.transaction_no is null then
+      -- fetch one row to get date/desc for error message 
+            for null_row in (
+               select transaction_date,
+                      description
+                 from new_transactions
+                where transaction_no is null
+                  and rownum = 1
+            ) loop
+               v_first_date := null_row.transaction_date;
+               v_first_desc := null_row.description;
+            end loop;
 
-      SELECT COUNT(*) INTO v_exists
-        FROM wkis_error_log
-       WHERE transaction_no IS NULL
-         AND error_msg = 'Missing transaction number';
+            select count(*)
+              into v_exists
+              from wkis_error_log
+             where transaction_no is null
+               and error_msg = 'Missing transaction number';
 
-      IF v_exists = 0 THEN
-        INSERT INTO wkis_error_log(transaction_no, transaction_date, description, error_msg)
-        VALUES (NULL, v_first_date, v_first_desc, 'Missing transaction number');
-        DBMS_OUTPUT.PUT_LINE('Logged missing Transaction Number');
-      END IF;
+            if v_exists = 0 then
+               insert into wkis_error_log (
+                  transaction_no,
+                  transaction_date,
+                  description,
+                  error_msg
+               ) values ( null,
+                          v_first_date,
+                          v_first_desc,
+                          'Missing transaction number' );
+               dbms_output.put_line('Logged missing Transaction Number');
+            end if;
 
       -- skip to next transaction_no
-      CONTINUE;
-    END IF;
+            continue;
+         end if;
 
     -- Inner: iterate all rows for this transaction
-    FOR row_rec IN (
-      SELECT transaction_no,
-             transaction_date,
-             description,
-             account_no,
-             transaction_type,
-             transaction_amount
-        FROM new_transactions
-       WHERE transaction_no = txn_rec.transaction_no
-       ORDER BY account_no
-    ) LOOP
+         for row_rec in (
+            select transaction_no,
+                   transaction_date,
+                   description,
+                   account_no,
+                   transaction_type,
+                   transaction_amount
+              from new_transactions
+             where transaction_no = txn_rec.transaction_no
+             order by account_no
+         ) loop
       -- capture header info from first row
-      IF v_first_date IS NULL THEN
-        v_first_date := row_rec.transaction_date;
-        v_first_desc := row_rec.description;
-      END IF;
+            if v_first_date is null then
+               v_first_date := row_rec.transaction_date;
+               v_first_desc := row_rec.description;
+            end if;
 
       -- validate transaction type
-      IF NOT v_err_found THEN
-        IF row_rec.transaction_type NOT IN (g_debit, g_credit) THEN
-          v_err_found := TRUE;
-          v_err_msg := 'Invalid transaction type ' || row_rec.transaction_type
-                       || ' for transaction ' || txn_rec.transaction_no;
-        ELSIF row_rec.transaction_amount < 0 THEN
-          v_err_found := TRUE;
-          v_err_msg := 'Negative amount ' || row_rec.transaction_amount
-                       || ' for transaction ' || txn_rec.transaction_no;
-        ELSE
+            if not v_err_found then
+               if row_rec.transaction_type not in ( g_debit,
+                                                    g_credit ) then
+                  v_err_found := true;
+                  v_err_msg := 'Invalid transaction type '
+                               || row_rec.transaction_type
+                               || ' for transaction '
+                               || txn_rec.transaction_no;
+               elsif row_rec.transaction_amount < 0 then
+                  v_err_found := true;
+                  v_err_msg := 'Negative amount '
+                               || row_rec.transaction_amount
+                               || ' for transaction '
+                               || txn_rec.transaction_no;
+               else
           -- validate account exists and get default type/balance
-          BEGIN
-            DECLARE
-              v_default_type account_type.default_trans_type%TYPE;
-              v_balance      account.account_balance%TYPE;
-            BEGIN
-              SELECT at.default_trans_type, a.account_balance
-                INTO v_default_type, v_balance
-                FROM account a
-                JOIN account_type at ON a.account_type_code = at.account_type_code
-               WHERE a.account_no = row_rec.account_no;
+                  begin
+                     declare
+                        v_default_type account_type.default_trans_type%type;
+                        v_balance      account.account_balance%type;
+                     begin
+                        select at.default_trans_type,
+                               a.account_balance
+                          into
+                           v_default_type,
+                           v_balance
+                          from account a
+                          join account_type at
+                        on a.account_type_code = at.account_type_code
+                         where a.account_no = row_rec.account_no;
               -- no immediate action here; we just checked existence
-            END;
-          EXCEPTION
-            WHEN NO_DATA_FOUND THEN
-              v_err_found := TRUE;
-              v_err_msg := 'Invalid account number: ' || row_rec.account_no
-                           || ' for transaction ' || txn_rec.transaction_no;
-          END;
-        END IF;
-      END IF;
+                     end;
+                  exception
+                     when no_data_found then
+                        v_err_found := true;
+                        v_err_msg := 'Invalid account number: '
+                                     || row_rec.account_no
+                                     || ' for transaction '
+                                     || txn_rec.transaction_no;
+                  end;
+               end if;
+            end if;
 
       -- accumulate totals if still valid
-      IF NOT v_err_found THEN
-        IF row_rec.transaction_type = g_debit THEN
-          v_total_debits := v_total_debits + row_rec.transaction_amount;
-        ELSE
-          v_total_credits := v_total_credits + row_rec.transaction_amount;
-        END IF;
-      END IF;
+            if not v_err_found then
+               if row_rec.transaction_type = g_debit then
+                  v_total_debits := v_total_debits + row_rec.transaction_amount;
+               else
+                  v_total_credits := v_total_credits + row_rec.transaction_amount;
+               end if;
+            end if;
 
-    END LOOP; -- inner row loop
+         end loop; -- inner row loop
 
     -- After reading all rows, check debits == credits
-    IF NOT v_err_found THEN
-      IF v_total_debits <> v_total_credits THEN
-        v_err_found := TRUE;
-        v_err_msg := 'Debits (' || v_total_debits || ') not equal to Credits ('
-                     || v_total_credits || ') for transaction ' || txn_rec.transaction_no;
-      END IF;
-    END IF;
+         if not v_err_found then
+            if v_total_debits <> v_total_credits then
+               v_err_found := true;
+               v_err_msg := 'Debits ('
+                            || v_total_debits
+                            || ') not equal to Credits ('
+                            || v_total_credits
+                            || ') for transaction '
+                            || txn_rec.transaction_no;
+            end if;
+         end if;
 
     -- If error, insert error log once
-    IF v_err_found THEN
-      SELECT COUNT(*) INTO v_exists
-        FROM wkis_error_log
-       WHERE transaction_no = txn_rec.transaction_no;
+         if v_err_found then
+            select count(*)
+              into v_exists
+              from wkis_error_log
+             where transaction_no = txn_rec.transaction_no;
 
-      IF v_exists = 0 THEN
-        INSERT INTO wkis_error_log(transaction_no, transaction_date, description, error_msg)
-        VALUES (txn_rec.transaction_no, v_first_date, v_first_desc, v_err_msg);
-      END IF;
+            if v_exists = 0 then
+               insert into wkis_error_log (
+                  transaction_no,
+                  transaction_date,
+                  description,
+                  error_msg
+               ) values ( txn_rec.transaction_no,
+                          v_first_date,
+                          v_first_desc,
+                          v_err_msg );
+            end if;
 
-      DBMS_OUTPUT.PUT_LINE('Error for txn ' || txn_rec.transaction_no || ': ' || v_err_msg);
+            dbms_output.put_line('Error for txn '
+                                 || txn_rec.transaction_no
+                                 || ': ' || v_err_msg);
 
       -- do not delete rows for this transaction; move to next txn
-      CONTINUE;
-    END IF;
+            continue;
+         end if;
 
     -- If clean: insert transaction_history, insert details, update accounts, delete from new_transactions
     -- re-loop over the rows for insertion/update
-    INSERT INTO transaction_history(transaction_no, transaction_date, description)
-    VALUES (txn_rec.transaction_no, v_first_date, v_first_desc);
+         insert into transaction_history (
+            transaction_no,
+            transaction_date,
+            description
+         ) values ( txn_rec.transaction_no,
+                    v_first_date,
+                    v_first_desc );
 
-    FOR row_rec IN (
-      SELECT transaction_no, account_no, transaction_type, transaction_amount
-        FROM new_transactions
-       WHERE transaction_no = txn_rec.transaction_no
-    ) LOOP
-      INSERT INTO transaction_detail(transaction_no, account_no, transaction_type, transaction_amount)
-      VALUES (row_rec.transaction_no, row_rec.account_no, row_rec.transaction_type, row_rec.transaction_amount);
+         for row_rec in (
+            select transaction_no,
+                   account_no,
+                   transaction_type,
+                   transaction_amount
+              from new_transactions
+             where transaction_no = txn_rec.transaction_no
+         ) loop
+            insert into transaction_detail (
+               transaction_no,
+               account_no,
+               transaction_type,
+               transaction_amount
+            ) values ( row_rec.transaction_no,
+                       row_rec.account_no,
+                       row_rec.transaction_type,
+                       row_rec.transaction_amount );
 
       -- adjust account
-      DECLARE
-        v_default_type account_type.default_trans_type%TYPE;
-        v_balance      account.account_balance%TYPE;
-      BEGIN
-        SELECT at.default_trans_type, a.account_balance
-          INTO v_default_type, v_balance
-          FROM account a
-          JOIN account_type at ON a.account_type_code = at.account_type_code
-         WHERE a.account_no = row_rec.account_no;
+            declare
+               v_default_type account_type.default_trans_type%type;
+               v_balance      account.account_balance%type;
+            begin
+               select at.default_trans_type,
+                      a.account_balance
+                 into
+                  v_default_type,
+                  v_balance
+                 from account a
+                 join account_type at
+               on a.account_type_code = at.account_type_code
+                where a.account_no = row_rec.account_no;
 
-        IF v_default_type = row_rec.transaction_type THEN
-          v_balance := v_balance + row_rec.transaction_amount;
-        ELSE
-          v_balance := v_balance - row_rec.transaction_amount;
-        END IF;
+               if v_default_type = row_rec.transaction_type then
+                  v_balance := v_balance + row_rec.transaction_amount;
+               else
+                  v_balance := v_balance - row_rec.transaction_amount;
+               end if;
 
-        UPDATE account SET account_balance = v_balance WHERE account_no = row_rec.account_no;
-      END;
-    END LOOP;
+               update account
+                  set
+                  account_balance = v_balance
+                where account_no = row_rec.account_no;
+            end;
+         end loop;
 
     -- finally delete processed rows
-    DELETE FROM new_transactions WHERE transaction_no = txn_rec.transaction_no;
+         delete from new_transactions
+          where transaction_no = txn_rec.transaction_no;
 
-  END LOOP; -- outer txn loop
+      --unexpected error
+      exception
+         when others then
+      -- log system error into wkis_error_log once for this transaction (avoid duplicates)
+            v_err_msg := sqlerrm;
+            select count(*)
+              into v_exists
+              from wkis_error_log
+             where transaction_no = txn_rec.transaction_no;
+            if v_exists = 0 then
+               insert into wkis_error_log (
+                  transaction_no,
+                  transaction_date,
+                  description,
+                  error_msg
+               ) values ( txn_rec.transaction_no,
+                          v_first_date,
+                          v_first_desc,
+                          v_err_msg );
+            end if;
+            dbms_output.put_line('Unhandled error for txn '
+                                 || txn_rec.transaction_no
+                                 || ': ' || v_err_msg);
+      -- ensure we don't propagate failure; move to next transaction
+            continue;
+      end;
+   end loop; -- outer txn loop
 
-  COMMIT;
-END;
+   commit;
+end;
 /
